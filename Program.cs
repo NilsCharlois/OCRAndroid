@@ -10,21 +10,13 @@ using System.Security.AccessControl;
 using System.Text;
 using System.Data;
 
-
-
 namespace OCRAndroid
 {   
     class Program
     {
         /*
-         * Test Matrix is 
-         * B N S S M T
-         * T P A R A B
-         * I I N B A U
-         * 
-         * 
          * Ideas : When the first letter of the word is found, create 8 potential directions:
-         * delete the ones out of bound based on the word's length (ie: word's length > letter position + array bounds)
+         * delete the ones out of bound based on the word's length
          * delete the ones not followed by the second letter, and so on
          * if nothing found, forget that letter and move on the next occurence of the first letter in the matrix
          */
@@ -43,40 +35,53 @@ namespace OCRAndroid
         }
         static void Main(string[] args)
         {
+            // returns string[] where [0] = Words.png path and [1] = Letters.png path
+            string[] imagesPath = SplitMainImage(@".\Images\Screenshot_20200802_171218_com.blackout.word.png");
 
-
-            if(!System.IO.File.Exists(@".\Images\Letters-Output.png")){
-                System.IO.File.Copy(@".\Images\Letters.png", @".\Images\Letters-Output.png");
+            if(!System.IO.File.Exists(imagesPath[1].Replace(".png","-out.png"))){
+                System.IO.File.Copy(imagesPath[1], imagesPath[1].Replace(".png","-out.png"));
             }
             
+            Tuple<List<string>, Letter[][]> result = ProcessImages(imagesPath);
+            matrix = result.Item2;
+            List<string> WordsToFind = result.Item1.Where(s=>!string.IsNullOrEmpty(s)).ToList();
 
-            // get all the letters from recognition library
-            matrix = GetAllLetters();
-            for(int i = 0; i<matrix.Length; i++)
-            {
-                for(int j = 0; j<matrix[i].Length; j++)
-                {
-                    Console.WriteLine($"Letter: {matrix[i][j].Value} Rectangle: TopLeft: {matrix[i][j].Rectangle.X} {matrix[i][j].Rectangle.Y}, BottomRight {matrix[i][j].Rectangle.X + matrix[i][j].Rectangle.Width} {matrix[i][j].Rectangle.Y + matrix[i][j].Rectangle.Height}");
-                }
-            }
-
-            List<string> WordsToFind = GetAllWords().Where(s=>!string.IsNullOrEmpty(s)).ToList();
-            
+            Tuple<Letter, Letter> testResult = FindLettersForWord(matrix, "TASTEFUL");
+                    
             WordsToFind.ForEach(word=>{
-                
-                    Tuple<Letter, Letter> result = SolveThisShit(matrix, word);
-                    DrawLine(result);
+                System.Console.WriteLine($"Processing word: {word}");
+                    Tuple<Letter, Letter> finalResult = FindLettersForWord(matrix, word);
+                    DrawLine(finalResult, imagesPath[1].Replace(".png","-out.png"));
                     System.Threading.Thread.Sleep(200);
             });
-
+            System.IO.File.Delete(imagesPath[1].Replace("-out.png","-out2.png"));
 
             Console.Read();
         }
 
-
-        private static void DrawLine(Tuple<Letter, Letter> result)
+        private static string[] SplitMainImage(string filePath)
         {
-            var img = Bitmap.FromFile(@".\Images\Letters-Output.png");
+            Rectangle words = new Rectangle(){Y = 1360,X = 20,Height=500, Width=1150};
+            Rectangle letters = new Rectangle(){Y = 375, X = 55, Height= 965, Width=1090 };
+            CropAtRect((Bitmap)Bitmap.FromFile(filePath), words).Save(@".\Images\Words.png", System.Drawing.Imaging.ImageFormat.Png);
+            CropAtRect((Bitmap)Bitmap.FromFile(filePath), letters).Save(@".\Images\Letters.png", System.Drawing.Imaging.ImageFormat.Png);
+            return new string[]{@".\Images\Words.png",@".\Images\Letters.png"};
+        }
+
+        private static Bitmap CropAtRect(Bitmap b, Rectangle r)
+        {
+            Bitmap nb = new Bitmap(r.Width, r.Height);
+            using (Graphics g = Graphics.FromImage(nb))
+            {
+                g.DrawImage(b, -r.X, -r.Y);
+                return nb;
+            }
+        }
+
+        private static void DrawLine(Tuple<Letter, Letter> result, string filePath)
+        {
+            // filepath should be like ".\Images\Letters-out.png"
+            var img = Bitmap.FromFile(filePath);
             Pen pen = new Pen(Color.Red, 3);
             using(var g = Graphics.FromImage(img))
             {
@@ -84,14 +89,13 @@ namespace OCRAndroid
                 new Point(result.Item1.Rectangle.X+result.Item1.Rectangle.Width/2, result.Item1.Rectangle.Y+result.Item1.Rectangle.Height/2),
                 new Point(result.Item2.Rectangle.X+result.Item2.Rectangle.Width/2, result.Item2.Rectangle.Y+result.Item2.Rectangle.Height/2));
             }
-            img.Save(@".\Images\Letters-Output2.png");
+            img.Save(filePath.Replace("-out.png","-out2.png"));
             img.Dispose();
-            System.IO.File.Delete(@".\Images\Letters-Output.png");
-            System.IO.File.Copy(@".\Images\Letters-Output2.png", @".\Images\Letters-Output.png");
+            System.IO.File.Delete(filePath);
+            System.IO.File.Copy(filePath.Replace("-out.png","-out2.png"), filePath);
         }
 
-
-        private static Tuple<Letter, Letter> SolveThisShit(Letter[][] matrix, string word)
+        private static Tuple<Letter, Letter> FindLettersForWord(Letter[][] matrix, string word)
         {
             char firstLetter = word[0];
             char secontLetter = word[1];
@@ -119,7 +123,7 @@ namespace OCRAndroid
             // for all of them, we need to have a look at the letters around it
             // if the second letter of the word is around it, we save the position and direction
 
-            var allCandidates = FilterBySecondLetterAndFindDirections(firstLetterOccurences, word);
+            var allCandidates = FilterBySecondLetterAndGetDirections(firstLetterOccurences, word);
 
             // filter down the result by checking that the last letter, for a given start letter and a direction is within the matrix
             allCandidates = FilterByLastLetterPosition(matrix, allCandidates, word);
@@ -130,14 +134,13 @@ namespace OCRAndroid
             foreach(KeyValuePair<Letter, List<Directions>> entry in allCandidates){
                 foreach(Directions direction in entry.Value)
                 {
-                    wordInGrid = getWord(matrix, entry.Key, direction, word);
+                    wordInGrid = TestCandidate(matrix, entry.Key, direction, word);
                     if(wordInGrid != null)
                     {
                         return wordInGrid;
                     }
                 }
             }
-
             return null;
         }
         
@@ -161,7 +164,7 @@ namespace OCRAndroid
             return output;
         }
 
-        private static Tuple<Letter, Letter> getWord(Letter[][] matrix, Letter startLetter, Directions direction, string word){
+        private static Tuple<Letter, Letter> TestCandidate(Letter[][] matrix, Letter startLetter, Directions direction, string word){
             int currentX = startLetter.X;
             int currentY = startLetter.Y;
             string str = "";
@@ -247,12 +250,13 @@ namespace OCRAndroid
                 return false;
             }
         }
-        private static Dictionary<Letter, List<Directions>> FilterBySecondLetterAndFindDirections(List<Letter> firstLetterOccurences, string word)
+        
+        private static Dictionary<Letter, List<Directions>> FilterBySecondLetterAndGetDirections(List<Letter> firstLetterOccurences, string word)
         {
             Dictionary<Letter, List<Directions>> output = new Dictionary<Letter, List<Directions>>();
             List<Directions> tmpDirections = new List<Directions>();
             firstLetterOccurences.ForEach(item=>{
-                tmpDirections = IsLetterAroundPosition(matrix, item.X, item.Y, word[1].ToString());
+                tmpDirections = GetDirectionsForSecondLetter(matrix, item.X, item.Y, word[1].ToString());
                 if(tmpDirections.Count>0) // at least one direction where the second letter is found
                 {
                     output.Add(item, tmpDirections);
@@ -260,39 +264,101 @@ namespace OCRAndroid
             });
             return output;
         }
-
-        private static List<string> GetAllWords()
+        
+        private static Tuple<List<string>, Letter[][]>  ProcessImages(string[] filePaths)
         {
-            List<string> allWords = new List<string>();
-            Pix pix = Pix.LoadFromFile(@".\Images\Words.png");
-            TesseractEngine engine = new TesseractEngine(@"C:\Users\Perso\Documents\tessdata", "eng", EngineMode.Default);
+            Pix pix = Pix.LoadFromFile(filePaths[0]);
+            TesseractEngine engine = new TesseractEngine(@"C:\Users\Perso\Documents\tessdata", "eng", EngineMode.TesseractOnly);
+            
             engine.SetVariable("tessedit_char_blacklist", "0123456789");
-            engine.SetVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+            engine.SetVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+            // get all words
+            List<string> allWords = new List<string>();
             engine.DefaultPageSegMode = PageSegMode.Auto;
             string curText = "";
 
-            using (var page = engine.Process(pix))
-            {
-                curText = page.GetText();
-                allWords.Add(curText);
-            }
+            var page = engine.Process(pix);
+            curText = page.GetText();
+            allWords.AddRange(curText.Replace("\n",",").Replace(" ",",").Split(",").ToList());
 
-            return curText.Replace("\n",",").Replace(" ","").Split(",").ToList();
-        }
+            page.Dispose();
 
-        private static Letter[][] GetAllLetters()
-        {
-            Pix pix = Pix.LoadFromFile(@".\Images\Letters.png");
-            TesseractEngine engine = new TesseractEngine(@"C:\Users\Perso\Documents\tessdata", "eng", EngineMode.Default);
-            engine.SetVariable("tessedit_char_blacklist", "0123456789");
-            engine.SetVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+            // get all letters
+            pix = Pix.LoadFromFile(filePaths[1]);
             engine.DefaultPageSegMode = PageSegMode.SingleBlock;
-            List<List<Letter>> testAllLetters = new List<List<Letter>>();
+            List<List<Letter>> allLetters = new List<List<Letter>>();
 
             int tmpYPos = 0;
             List<Letter> tmpList = new List<Letter>();
+            Letter currentLetter;
             int currentX = 0;
             int currentY = 0;
+
+            Tuple<char, char, float> lowConfidenceRerun;
+            
+            using (page = engine.Process(pix))
+            using (var iter = page.GetIterator())
+            {
+                iter.Begin();
+                do
+                {
+                    if (iter.TryGetBoundingBox(PageIteratorLevel.Symbol, out var rect))
+                    {
+                        curText = iter.GetText(PageIteratorLevel.Symbol);
+                        
+                        System.Console.WriteLine($"confidence {iter.GetConfidence(PageIteratorLevel.Symbol)} for value {curText}, at location {rect.X1}:{rect.Y1}, height:{rect.Height}, width:{rect.Width}, next value {iter.GetChoiceIterator().GetText()}");    
+
+                        if(Math.Abs(rect.Y1-tmpYPos)>5) // letter may not have the sime size, plus if there are more than 10 pixels, we can assume this is a new line
+                        //if(rect.Y1 != tmpYPos) // new line
+                        {
+                            tmpYPos = rect.Y1;
+                            allLetters.Add(tmpList);
+                            tmpList = new List<Letter>();
+                            currentX ++ ;
+                            currentY = 0;
+                        }
+                        currentLetter = new Letter() {
+                            Rectangle = new Rectangle(rect.X1, rect.Y1, rect.Width, rect.Height),
+                            Value = curText[0],
+                            X = currentX-1,
+                            Y = currentY++,
+                            Confidence = iter.GetConfidence(PageIteratorLevel.Symbol),
+                            SecondSuggestion = iter.GetChoiceIterator().GetText()[0]
+                        };
+                        // if low confidence or first suggestion does not match second suggestion, re-run the engine on the rectangle only
+                        if(iter.GetConfidence(PageIteratorLevel.Symbol) < 80f || currentLetter.Value != currentLetter.SecondSuggestion)
+                        {
+                            lowConfidenceRerun = ReRunForLowConfidence(currentLetter, filePaths[1]);
+                            currentLetter.Value = lowConfidenceRerun.Item1;
+                            currentLetter.SecondSuggestion = lowConfidenceRerun.Item2;
+                            currentLetter.Confidence = lowConfidenceRerun.Item3;
+                            System.Console.WriteLine($"After ReRun: confidence {iter.GetConfidence(PageIteratorLevel.Symbol)} for value {curText}, next value {iter.GetChoiceIterator().GetText()}");    
+                        }
+                        tmpList.Add(currentLetter);
+                    }
+                } while (iter.Next(PageIteratorLevel.Symbol));
+                allLetters.Add(tmpList);
+            }
+            return Tuple.Create(allWords, allLetters.Skip(1).Select(a=>a.ToArray()).ToArray());
+        }
+
+        private static Tuple<char,char,float> ReRunForLowConfidence(Letter letterWithLowConfidence, string letterFilePath)
+        {
+            CropAtRect((Bitmap)Bitmap.FromFile(letterFilePath), new Rectangle(){
+                Height = letterWithLowConfidence.Rectangle.Height+5,
+                Width = letterWithLowConfidence.Rectangle.Width+5,
+                X = letterWithLowConfidence.Rectangle.X-5,
+                Y = letterWithLowConfidence.Rectangle.Y-5,
+            }).Save(@".\Images\TmpLetterReRun.png");
+
+            TesseractEngine engine = new TesseractEngine(@"C:\Users\Perso\Documents\tessdata", "eng", EngineMode.TesseractOnly);
+            
+            engine.SetVariable("tessedit_char_blacklist", "0123456789");
+            engine.SetVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+            Pix pix = Pix.LoadFromFile(@".\Images\Test.png");
+            engine.DefaultPageSegMode = PageSegMode.SingleBlock;
 
             using (var page = engine.Process(pix))
             using (var iter = page.GetIterator())
@@ -302,31 +368,17 @@ namespace OCRAndroid
                 {
                     if (iter.TryGetBoundingBox(PageIteratorLevel.Symbol, out var rect))
                     {
-                        var curText = iter.GetText(PageIteratorLevel.Symbol);
-                        
-                        if(rect.Y1 != tmpYPos) // new line
-                        {
-                            tmpYPos = rect.Y1;
-                            testAllLetters.Add(tmpList);
-                            tmpList = new List<Letter>();
-                            currentX ++ ;
-                            currentY = 0;
-                        }
-                        tmpList.Add(new Letter() {
-                            Rectangle = new Rectangle(rect.X1, rect.Y1, rect.Width, rect.Height),
-                            Value = curText[0],
-                            X = currentX-1,
-                            Y = currentY++
-                        });
+                        System.Console.WriteLine($"confidence {iter.GetConfidence(PageIteratorLevel.Symbol)} for value {iter.GetText(PageIteratorLevel.Symbol)}, next value {iter.GetChoiceIterator().GetText()}");    
+                        return Tuple.Create(iter.GetText(PageIteratorLevel.Symbol)[0], iter.GetChoiceIterator().GetText()[0], iter.GetConfidence(PageIteratorLevel.Symbol));
                     }
                 } while (iter.Next(PageIteratorLevel.Symbol));
-                            testAllLetters.Add(tmpList);
             }
-            Letter[][] AllLetters = testAllLetters.Skip(1).Select(a=>a.ToArray()).ToArray();
-            return AllLetters;
+            
+            System.IO.File.Delete(@".\Images\TmpLetterReRun.png");
+            return null;            
         }
 
-        private static List<Directions> IsLetterAroundPosition(Letter[][] matrix, int i, int j, string letterToFind)
+        private static List<Directions> GetDirectionsForSecondLetter(Letter[][] matrix, int i, int j, string letterToFind)
         {
             List<Directions> directions = new List<Directions>();
 
